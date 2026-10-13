@@ -22,6 +22,7 @@ import {
     Select,
     MenuItem,
     FormControl,
+    FormHelperText,
     InputLabel,
     Tooltip,
     Alert,
@@ -45,10 +46,23 @@ import type {DiscountPriceType} from "@/enums/DiscountPriceType.ts";
 import type {DiscountTimeType} from "@/enums/DiscountTimeType.ts";
 
 type TabType = "users" | "packages" | "events" | "discounts" | "destinations";
+type FormErrors = Record<string, string>;
 
 const roleOptions = Object.values(UserType);
 
 const tableCellSx = { fontWeight: 600, color: "text.secondary", borderBottom: "2px solid #E8E0D5" };
+
+// ---------- Validation helpers ----------
+const isBlank = (v: string) => v.trim() === "";
+const isWholePositive = (v: string) => /^\d+$/.test(v.trim()) && Number(v) > 0;
+const isPositiveNumber = (v: string) => !isBlank(v) && !isNaN(Number(v)) && Number(v) > 0;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// A save "failed" if the service resolved with an explicit failure marker.
+const isFailedResponse = (res: unknown) => {
+    const r = res as { success?: boolean; status?: number; data?: { success?: boolean } } | null | undefined;
+    return !!r && (r.success === false || r.data?.success === false || (typeof r.status === "number" && r.status >= 400));
+};
 
 function ConfirmDeleteDialog({ open, name, onConfirm, onClose }: { open: boolean; name: string; onConfirm: () => void; onClose: () => void }) {
     return (
@@ -123,6 +137,10 @@ export default function AdminPanel() {
     const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; type: TabType } | null>(null);
     const [editDialog, setEditDialog] = useState<{ open: boolean; type: TabType; record: Record<string, unknown> | null }>({ open: false, type: "users", record: null });
     const [saved, setSaved] = useState(false);
+    // Becomes true after the first click on Save; from then on every field
+    // shows its inline error live (and clears as soon as it is fixed).
+    const [submitted, setSubmitted] = useState(false);
+    const [serverError, setServerError] = useState("");
 
     const [pkgForm, setPkgForm] = useState({ displayName: "", price: "", duration: "", description: "", capacity: "", destinationIds: [] as number[], eventIds: [] as number[], discountIds: [] as number[] });
     const [destForm, setDestForm] = useState({ displayName: "", location: "", description: "" });
@@ -149,6 +167,98 @@ export default function AdminPanel() {
         endDate: "",
         applicablePackages: [] as number[]
     });
+
+    // ---------- Validation (one place for every entity) ----------
+    const validateForm = (type: TabType, isEdit: boolean): FormErrors => {
+        const e: FormErrors = {};
+
+        if (type === "users") {
+            if (!isEdit) {
+                const username = userForm.username.trim();
+                if (!username) e.username = "Username is required";
+                else if (username.length < 3) e.username = "Username must be at least 3 characters";
+                else if (username.length > 30) e.username = "Username must be 30 characters or less";
+                else if (!/^[A-Za-z0-9._-]+$/.test(username)) e.username = "Username can only contain letters, numbers, dots, underscores and hyphens";
+
+                const email = userForm.email.trim();
+                if (!email) e.email = "Email is required";
+                else if (!EMAIL_REGEX.test(email)) e.email = "Enter a valid email address";
+
+                const pw = userForm.password;
+                if (!pw) e.password = "Password is required";
+                else if (pw.length < 8) e.password = "Password must be at least 8 characters";
+                else if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) e.password = "Password must contain at least one letter and one number";
+            }
+            if (!userForm.userType) e.userType = "Role is required";
+        }
+
+        if (type === "packages") {
+            const name = pkgForm.displayName.trim();
+            if (!name) e.displayName = "Package name is required";
+            else if (name.length > 100) e.displayName = "Package name must be 100 characters or less";
+            if (!isPositiveNumber(pkgForm.price)) e.price = "Price must be a number greater than 0";
+            if (!isWholePositive(pkgForm.duration)) e.duration = "Duration must be a whole number greater than 0";
+            if (!isWholePositive(pkgForm.capacity)) e.capacity = "Capacity must be a whole number greater than 0";
+            if (pkgForm.description.length > 1000) e.description = "Description must be 1000 characters or less";
+        }
+
+        if (type === "destinations") {
+            const name = destForm.displayName.trim();
+            if (!name) e.displayName = "Destination name is required";
+            else if (name.length > 100) e.displayName = "Destination name must be 100 characters or less";
+            const loc = destForm.location.trim();
+            if (!loc) e.location = "Location is required";
+            else if (loc.length > 100) e.location = "Location must be 100 characters or less";
+            if (destForm.description.length > 1000) e.description = "Description must be 1000 characters or less";
+        }
+
+        if (type === "events") {
+            const name = eventForm.eventName.trim();
+            if (!name) e.eventName = "Event name is required";
+            else if (name.length > 100) e.eventName = "Event name must be 100 characters or less";
+            const loc = eventForm.location.trim();
+            if (!loc) e.location = "Location is required";
+            else if (loc.length > 100) e.location = "Location must be 100 characters or less";
+            if (eventForm.description.length > 1000) e.description = "Description must be 1000 characters or less";
+            if (!eventForm.startDate) e.startDate = "Start date is required";
+            if (!eventForm.endDate) e.endDate = "End date is required";
+            else if (eventForm.startDate && eventForm.endDate < eventForm.startDate) e.endDate = "End date cannot be before start date";
+            if (!isPositiveNumber(eventForm.price)) e.price = "Price must be a number greater than 0";
+            if (!isWholePositive(eventForm.capacity)) e.capacity = "Capacity must be a whole number greater than 0";
+        }
+
+        if (type === "discounts") {
+            if (discountForm.discountPriceType === "FIXED") {
+                if (!isPositiveNumber(discountForm.fixed)) e.fixed = "Fixed amount must be greater than 0";
+            } else {
+                const pct = Number(discountForm.percentage);
+                if (isBlank(discountForm.percentage) || isNaN(pct) || pct < 1 || pct > 100) {
+                    e.percentage = "Percentage must be a number between 1 and 100";
+                }
+            }
+            if (isBlank(discountForm.minAmount)) e.minAmount = "Minimum amount is required";
+            else if (isNaN(Number(discountForm.minAmount)) || Number(discountForm.minAmount) < 0) e.minAmount = "Minimum amount must be 0 or more";
+
+            if (discountForm.discountTimeType === "CODE") {
+                const code = discountForm.couponCode.trim();
+                if (!code) e.couponCode = "Coupon code is required";
+                else if (!/^[A-Z0-9_-]{3,20}$/.test(code)) e.couponCode = "Coupon code must be 3-20 characters (letters, numbers, - or _)";
+            }
+            if (discountForm.discountTimeType === "TIMED") {
+                if (!discountForm.startDate) e.startDate = "Start date is required";
+                if (!discountForm.endDate) e.endDate = "End date is required";
+            }
+            if (!e.endDate && discountForm.startDate && discountForm.endDate && discountForm.endDate < discountForm.startDate) {
+                e.endDate = "End date cannot be before start date";
+            }
+        }
+
+        return e;
+    };
+
+    const errors: FormErrors = submitted ? validateForm(editDialog.type, !!editDialog.record) : {};
+    // Spread onto a TextField to get the red outline + helper text from pic 3.
+    const fp = (name: string) => ({ error: !!errors[name], helperText: errors[name] });
 
     const loadPackages = () => {
         tourPackageAPI.getPackages().then((res) => {
@@ -223,7 +333,7 @@ export default function AdminPanel() {
             save: (id) => {
                 const payload = {
                     id: id,
-                    displayName: pkgForm.displayName,
+                    displayName: pkgForm.displayName.trim(),
                     price: Number(pkgForm.price) || 0,
                     duration: Number(pkgForm.duration) || 0,
                     description: pkgForm.description,
@@ -249,8 +359,8 @@ export default function AdminPanel() {
             save: (id) => {
                 const dest: Omit<Destination, "avgRating"> = {
                     id: id,
-                    displayName: destForm.displayName,
-                    location: destForm.location,
+                    displayName: destForm.displayName.trim(),
+                    location: destForm.location.trim(),
                     description: destForm.description,
                     offeredPackageIds: (editDialog.record as Partial<Destination> | null)?.offeredPackageIds ?? [],
                 };
@@ -271,8 +381,8 @@ export default function AdminPanel() {
             }),
             save: (id) => {
                 const user = {
-                    username: userForm.username,
-                    email: userForm.email,
+                    username: userForm.username.trim(),
+                    email: userForm.email.trim(),
                     password: userForm.password,
                     userType: userForm.userType as any,
                 };
@@ -301,8 +411,8 @@ export default function AdminPanel() {
             save: (id) => {
                 const payload = {
                     eventId: id,
-                    eventName: eventForm.eventName,
-                    location: eventForm.location,
+                    eventName: eventForm.eventName.trim(),
+                    location: eventForm.location.trim(),
                     description: eventForm.description,
                     capacity: Number(eventForm.capacity) || 0,
                     price: Number(eventForm.price) || 0,
@@ -333,7 +443,7 @@ export default function AdminPanel() {
             },
             save: (id) => {
                 const payload = {
-                    couponCode: discountForm.couponCode || undefined,
+                    couponCode: discountForm.couponCode.trim() || undefined,
                     percentage: discountForm.discountPriceType === "PERCENTAGE" ? Number(discountForm.percentage) || 0 : undefined,
                     fixed: discountForm.discountPriceType === "FIXED" ? Number(discountForm.fixed) || 0 : undefined,
                     minAmount: Number(discountForm.minAmount) || 0,
@@ -363,19 +473,47 @@ export default function AdminPanel() {
         entityConfig[type].mapToForm(record);
         setEditDialog({ open: true, type, record });
         setSaved(false);
+        setSubmitted(false);
+        setServerError("");
+    };
+
+    const closeDialog = () => {
+        setEditDialog({ ...editDialog, open: false });
+        setSubmitted(false);
+        setServerError("");
     };
 
     const finishSave = (reload: () => void) => {
         reload();
         setSaved(true);
-        setTimeout(() => { setEditDialog({ open: false, type: tab, record: null }); setSaved(false); }, 800);
+        setTimeout(() => {
+            setEditDialog({ open: false, type: tab, record: null });
+            setSaved(false);
+            setSubmitted(false);
+        }, 800);
     };
 
     const handleSave = () => {
         const { type, record } = editDialog;
+        setSubmitted(true);
+        setServerError("");
+
+        // Stop here and show every invalid field at once (inline, like pic 3).
+        if (Object.keys(validateForm(type, !!record)).length > 0) return;
+
         const config = entityConfig[type];
         const id = record ? config.getId(record) : undefined;
-        config.save(id).then(() => finishSave(config.reload));
+        Promise.resolve(config.save(id))
+            .then((res) => {
+                if (isFailedResponse(res)) {
+                    setServerError("Could not save. Please check the details and try again.");
+                    return;
+                }
+                finishSave(config.reload);
+            })
+            .catch((err: any) => {
+                setServerError(err?.response?.data?.message ?? err?.message ?? "Could not save. Please try again.");
+            });
     };
 
     const getPackageNames = (ids: number[]) =>
@@ -523,16 +661,18 @@ export default function AdminPanel() {
             </Box>
 
             {/* Generic edit dialog */}
-            <Dialog open={editDialog.open} onClose={() => setEditDialog({ ...editDialog, open: false })} maxWidth="sm" fullWidth>
+            <Dialog open={editDialog.open} onClose={closeDialog} maxWidth="sm" fullWidth>
                 <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     {editDialog.record ? "Edit Record" : "Add New Record"}
-                    <IconButton size="small" onClick={() => setEditDialog({ ...editDialog, open: false })}><Close fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={closeDialog}><Close fontSize="small" /></IconButton>
                 </DialogTitle>
                 <DialogContent dividers>
                     {saved ? (
                         <Alert severity="success">Saved successfully!</Alert>
                     ) : (
                         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 0.5 }}>
+                            {serverError && <Alert severity="error">{serverError}</Alert>}
+
                             {editDialog.type === "users" && (
                                 <>
                                     <TextField
@@ -542,6 +682,7 @@ export default function AdminPanel() {
                                         size="small"
                                         fullWidth
                                         disabled={!!editDialog.record}
+                                        {...fp("username")}
                                     />
                                     <TextField
                                         label="Email"
@@ -551,6 +692,7 @@ export default function AdminPanel() {
                                         size="small"
                                         fullWidth
                                         disabled={!!editDialog.record}
+                                        {...fp("email")}
                                     />
                                     {!editDialog.record && (
                                         <TextField
@@ -560,9 +702,10 @@ export default function AdminPanel() {
                                             onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
                                             size="small"
                                             fullWidth
+                                            {...fp("password")}
                                         />
                                     )}
-                                    <FormControl size="small" fullWidth>
+                                    <FormControl size="small" fullWidth error={!!errors.userType}>
                                         <InputLabel>Role</InputLabel>
                                         <Select
                                             label="Role"
@@ -571,6 +714,7 @@ export default function AdminPanel() {
                                         >
                                             {roleOptions.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
                                         </Select>
+                                        {errors.userType && <FormHelperText>{errors.userType}</FormHelperText>}
                                     </FormControl>
                                 </>
                             )}
@@ -582,6 +726,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setPkgForm({ ...pkgForm, displayName: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("displayName")}
                                     />
                                     <FormControl size="small" fullWidth>
                                         <InputLabel>Destinations</InputLabel>
@@ -654,6 +799,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setPkgForm({ ...pkgForm, price: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("price")}
                                     />
                                     <TextField
                                         label="Duration (days)"
@@ -662,6 +808,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setPkgForm({ ...pkgForm, duration: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("duration")}
                                     />
                                     <TextField
                                         label="Capacity"
@@ -670,6 +817,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setPkgForm({ ...pkgForm, capacity: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("capacity")}
                                     />
                                     <TextField
                                         label="Description"
@@ -679,14 +827,15 @@ export default function AdminPanel() {
                                         fullWidth
                                         multiline
                                         minRows={2}
+                                        {...fp("description")}
                                     />
                                 </>
                             )}
                             {editDialog.type === "events" && (
                                 <>
-                                    <TextField label="Event Name" value={eventForm.eventName} onChange={(e) => setEventForm({ ...eventForm, eventName: e.target.value })} size="small" fullWidth />
-                                    <TextField label="Location" value={eventForm.location} onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })} size="small" fullWidth />
-                                    <TextField label="Description" value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} size="small" fullWidth multiline minRows={2} />
+                                    <TextField label="Event Name" value={eventForm.eventName} onChange={(e) => setEventForm({ ...eventForm, eventName: e.target.value })} size="small" fullWidth {...fp("eventName")} />
+                                    <TextField label="Location" value={eventForm.location} onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })} size="small" fullWidth {...fp("location")} />
+                                    <TextField label="Description" value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} size="small" fullWidth multiline minRows={2} {...fp("description")} />
                                     <FormControl size="small" fullWidth>
                                         <InputLabel>Tour Packages</InputLabel>
                                         <Select
@@ -706,10 +855,10 @@ export default function AdminPanel() {
                                             {packages?.map((p) => <MenuItem key={p.id} value={p.id}>{p.displayName}</MenuItem>)}
                                         </Select>
                                     </FormControl>
-                                    <TextField label="Start Date" type="date" value={eventForm.startDate} onChange={(e) => setEventForm({ ...eventForm, startDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} />
-                                    <TextField label="End Date" type="date" value={eventForm.endDate} onChange={(e) => setEventForm({ ...eventForm, endDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} />
-                                    <TextField label="Price (LKR)" type="number" value={eventForm.price} onChange={(e) => setEventForm({ ...eventForm, price: e.target.value })} size="small" fullWidth />
-                                    <TextField label="Capacity" type="number" value={eventForm.capacity} onChange={(e) => setEventForm({ ...eventForm, capacity: e.target.value })} size="small" fullWidth />
+                                    <TextField label="Start Date" type="date" value={eventForm.startDate} onChange={(e) => setEventForm({ ...eventForm, startDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} {...fp("startDate")} />
+                                    <TextField label="End Date" type="date" value={eventForm.endDate} onChange={(e) => setEventForm({ ...eventForm, endDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} {...fp("endDate")} />
+                                    <TextField label="Price (LKR)" type="number" value={eventForm.price} onChange={(e) => setEventForm({ ...eventForm, price: e.target.value })} size="small" fullWidth {...fp("price")} />
+                                    <TextField label="Capacity" type="number" value={eventForm.capacity} onChange={(e) => setEventForm({ ...eventForm, capacity: e.target.value })} size="small" fullWidth {...fp("capacity")} />
                                 </>
                             )}
                             {editDialog.type === "discounts" && (
@@ -726,11 +875,11 @@ export default function AdminPanel() {
                                         </Select>
                                     </FormControl>
                                     {discountForm.discountPriceType === "FIXED" ? (
-                                        <TextField label="Fixed Amount (LKR)" type="number" value={discountForm.fixed} onChange={(e) => setDiscountForm({ ...discountForm, fixed: e.target.value })} size="small" fullWidth />
+                                        <TextField label="Fixed Amount (LKR)" type="number" value={discountForm.fixed} onChange={(e) => setDiscountForm({ ...discountForm, fixed: e.target.value })} size="small" fullWidth {...fp("fixed")} />
                                     ) : (
-                                        <TextField label="Discount %" type="number" value={discountForm.percentage} onChange={(e) => setDiscountForm({ ...discountForm, percentage: e.target.value })} size="small" fullWidth slotProps={{ htmlInput: { min: 1, max: 100 } }} />
+                                        <TextField label="Discount %" type="number" value={discountForm.percentage} onChange={(e) => setDiscountForm({ ...discountForm, percentage: e.target.value })} size="small" fullWidth slotProps={{ htmlInput: { min: 1, max: 100 } }} {...fp("percentage")} />
                                     )}
-                                    <TextField label="Minimum Amount (LKR)" type="number" value={discountForm.minAmount} onChange={(e) => setDiscountForm({ ...discountForm, minAmount: e.target.value })} size="small" fullWidth />
+                                    <TextField label="Minimum Amount (LKR)" type="number" value={discountForm.minAmount} onChange={(e) => setDiscountForm({ ...discountForm, minAmount: e.target.value })} size="small" fullWidth {...fp("minAmount")} />
                                     <FormControl size="small" fullWidth>
                                         <InputLabel>Applies Via</InputLabel>
                                         <Select
@@ -750,6 +899,7 @@ export default function AdminPanel() {
                                             size="small"
                                             fullWidth
                                             slotProps={{ htmlInput: { style: { textTransform: "uppercase" } } }}
+                                            {...fp("couponCode")}
                                         />
                                     )}
                                     <FormControl size="small" fullWidth>
@@ -771,8 +921,8 @@ export default function AdminPanel() {
                                             {packages?.map((p) => <MenuItem key={p.id} value={p.id}>{p.displayName}</MenuItem>)}
                                         </Select>
                                     </FormControl>
-                                    <TextField label="Start Date" type="date" value={discountForm.startDate} onChange={(e) => setDiscountForm({ ...discountForm, startDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} />
-                                    <TextField label="End Date" type="date" value={discountForm.endDate} onChange={(e) => setDiscountForm({ ...discountForm, endDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} />
+                                    <TextField label="Start Date" type="date" value={discountForm.startDate} onChange={(e) => setDiscountForm({ ...discountForm, startDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} {...fp("startDate")} />
+                                    <TextField label="End Date" type="date" value={discountForm.endDate} onChange={(e) => setDiscountForm({ ...discountForm, endDate: e.target.value })} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} {...fp("endDate")} />
                                 </>
                             )}
                             {editDialog.type === "destinations" && (
@@ -783,6 +933,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setDestForm({ ...destForm, displayName: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("displayName")}
                                     />
                                     <TextField
                                         label="Location"
@@ -790,6 +941,7 @@ export default function AdminPanel() {
                                         onChange={(e) => setDestForm({ ...destForm, location: e.target.value })}
                                         size="small"
                                         fullWidth
+                                        {...fp("location")}
                                     />
                                     <TextField
                                         label="Description"
@@ -799,6 +951,7 @@ export default function AdminPanel() {
                                         fullWidth
                                         multiline
                                         minRows={2}
+                                        {...fp("description")}
                                     />
                                 </>
                             )}
@@ -806,7 +959,7 @@ export default function AdminPanel() {
                     )}
                 </DialogContent>
                 <DialogActions sx={{ px: 3, pb: 2 }}>
-                    <Button onClick={() => setEditDialog({ ...editDialog, open: false })} color="inherit">Cancel</Button>
+                    <Button onClick={closeDialog} color="inherit">Cancel</Button>
                     <Button variant="contained" onClick={handleSave}>Save</Button>
                 </DialogActions>
             </Dialog>
