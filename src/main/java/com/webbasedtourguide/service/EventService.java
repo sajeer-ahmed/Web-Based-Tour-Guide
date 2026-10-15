@@ -106,6 +106,10 @@ public class EventService {
     public BasicResponse deleteEvent(Integer id) {
         Event event = eventRepository.findById(id).orElse(null);
         if (event == null) return BasicResponse.badRequest("No such event");
+
+        if (bookingRepository.countByEvent_Id(id) > 0)
+            return BasicResponse.badRequest("Tourists are registered for this event. End it instead of deleting it.");
+
         tourPackageService.detachEvent(event);
         eventRepository.delete(event);
         return BasicResponse.ok();

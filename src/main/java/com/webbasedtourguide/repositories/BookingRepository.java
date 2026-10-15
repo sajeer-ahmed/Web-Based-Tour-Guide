@@ -29,4 +29,6 @@ public interface BookingRepository extends CrudRepository<TourBooking, Integer> 
 
     @Query("SELECT b FROM TourBooking b JOIN b.booker bk WHERE bk.id = :userId ORDER BY b.bookedDate DESC")
     List<TourBooking> getTourBookingsById(Integer userId);
+
+    long countByEvent_Id(Integer eventId);
 }
