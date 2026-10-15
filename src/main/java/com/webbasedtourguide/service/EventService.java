@@ -48,7 +48,7 @@ public class EventService {
         return null;
     }
 
-    @Transactional
+    @Transactional(rollbackOn = PackageException.class)
     public BasicResponse createNewEvent(EventControlDTO request) throws PackageException {
 
         String error = validate(request, true);
@@ -72,7 +72,7 @@ public class EventService {
         return BasicResponse.ok();
     }
 
-    @Transactional
+    @Transactional(rollbackOn = {PackageException.class, EventException.class})
     public BasicResponse editEvent(EventControlDTO request) throws EventException, PackageException {
 
         Event event = eventRepository.findById(request.getEventId())
