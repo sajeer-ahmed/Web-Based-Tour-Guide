@@ -23,4 +23,5 @@ public interface EventRepository extends CrudRepository<Event, Integer> {
     @Query("SELECT e FROM Event e JOIN e.applicablePackages p WHERE p.id = :pkgId " +
             "AND e.endDate > :now")
     List<Event> getValidEvents(Integer pkgId, Instant now);
+
 }
