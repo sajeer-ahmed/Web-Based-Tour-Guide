@@ -146,11 +146,10 @@ public class EventService {
 
     @Transactional
     public BasicResponse discontinueEvent(EventControlDTO request) throws EventException {
-
-        if (eventRepository.discontinueEvent(request.getBookingId(), Instant.now()) == 1) {
-            return BasicResponse.ok();
+        if (request.getEventId() == null) {
+            throw new EventException("No such event");
         }
-        throw new EventException("Error discontinuing event");
+        return discontinueEvent(request.getEventId());
     }
 
     public Optional<Event> getValidEvent(Integer eventId, Integer pkgId) {
