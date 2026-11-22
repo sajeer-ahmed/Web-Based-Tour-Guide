@@ -140,12 +140,18 @@ public class TourPackage {
     }
 
     public List<Rating> getRatings(int count) {
+        if (ratings == null || ratings.isEmpty()) {
+            return new ArrayList<>();
+        }
         return ratings.subList(0, Math.min(ratings.size(), count));
     }
 
     public double getRatingAvg() {
-        return (int) ratings.stream().mapToInt(Rating::getStarRating)
+        if (ratings == null || ratings.isEmpty()) {
+            return 0.0;
+        }
+        return ratings.stream().mapToInt(Rating::getStarRating)
                 .average()
-                .orElse(0);
+                .orElse(0.0);
     }
 }
