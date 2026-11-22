@@ -16,6 +16,7 @@ import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -79,22 +80,26 @@ public class DiscountService {
     }
 
     public BigDecimal applyDiscount(BigDecimal orgPrice, Discount discount) {
+        if (orgPrice == null) return BigDecimal.ZERO;
+        if (discount == null) return orgPrice;
 
         if (discount.getDiscountPriceType() == DiscountPriceType.INVALID ||
                 discount.getDiscountTimeType() == DiscountTimeType.INVALID)
             throw new DiscountException("Invalid discount");
-        if (discount.getStartDate().isAfter(Instant.now()) ||
-                discount.getEndDate().isBefore(Instant.now()))
+        if ((discount.getStartDate() != null && discount.getStartDate().isAfter(Instant.now())) ||
+                (discount.getEndDate() != null && discount.getEndDate().isBefore(Instant.now())))
             throw new DiscountException("Discount expired");
 
         if (discount.getDiscountPriceType() == DiscountPriceType.FIXED) {
-            return orgPrice.subtract(discount.getFixed()).max(BigDecimal.ZERO);
+            BigDecimal fixedOff = discount.getFixed() != null ? discount.getFixed() : BigDecimal.ZERO;
+            return orgPrice.subtract(fixedOff).max(BigDecimal.ZERO);
         }
 
         else if (discount.getDiscountPriceType() == DiscountPriceType.PERCENTAGE) {
-            return orgPrice.subtract(orgPrice.multiply(
-                    (discount.getPercentage().divide(BigDecimal.valueOf(100))))
-                    .max(BigDecimal.ZERO)).max(BigDecimal.ZERO);
+            if (discount.getPercentage() == null) return orgPrice;
+            BigDecimal discountAmount = orgPrice.multiply(discount.getPercentage())
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+            return orgPrice.subtract(discountAmount).max(BigDecimal.ZERO);
         }
 
         throw new DiscountException("Unknown error");
