@@ -65,18 +65,23 @@ public class Ticket {
         messages.add(userMessage);
         addObserver(userMessage.getSender());
 
-        if (status == TicketStatus.AWAITINGRESPONSE && messages.size() > 1)
+        if (status == TicketStatus.AWAITINGRESPONSE && messages.size() > 1) {
             status = TicketStatus.ONGOING;
-        else {
-            // Notify subscribed people if ticket is not new
+        }
+
+        // Notify subscribed people only if this is an existing ticket (reply) and not the initial creation
+        if (id != null && messages.size() > 1) {
             String notifTitle = "Reply to ticket T%s".formatted(id);
-            String notifMessage = userMessage.getContent().substring(0,
-                    Math.min(userMessage.getContent().length(), Notification.MSG_LENGTH));
+            String content = userMessage.getContent() != null ? userMessage.getContent() : "";
+            String notifMessage = content.substring(0,
+                    Math.min(content.length(), Notification.MSG_LENGTH));
             for (AuthEntity authEntity : authEntities) {
                 if (authEntity.getUserType() == UserType.AGENCYSTAFF || authEntity.getUserType() == UserType.TOURMANAGER
-                ||  authEntity.getId() == (long) userMessage.getSender().getId())
+                || (userMessage.getSender() != null && authEntity.getId() != null && authEntity.getId().equals(userMessage.getSender().getId())))
                     continue;
-                authEntity.getDependent().addNotification(new Notification(notifTitle, notifMessage));
+                if (authEntity.getDependent() != null) {
+                    authEntity.getDependent().addNotification(new Notification(notifTitle, notifMessage));
+                }
             }
         }
     }
@@ -98,15 +103,20 @@ public class Ticket {
         status = TicketStatus.SOLVED;
 
         String notifTitle = "Ticket T%s solved".formatted(id);
-        String notifMessage = messages.getLast().getContent().substring(0,
-                Math.min(messages.getLast().getContent().length(), Notification.MSG_LENGTH));
+        String lastContent = (!messages.isEmpty() && messages.getLast().getContent() != null)
+                ? messages.getLast().getContent()
+                : "";
+        String notifMessage = lastContent.substring(0,
+                Math.min(lastContent.length(), Notification.MSG_LENGTH));
 
         // Notify the people who raised/followed the ticket (not staff, who closed it) but keep them
         // attached so the solved ticket stays visible in their history
         for (AuthEntity authEntity : authEntities) {
             if (authEntity.getUserType() == UserType.AGENCYSTAFF || authEntity.getUserType() == UserType.TOURMANAGER)
                 continue;
-            authEntity.getDependent().addNotification(new Notification(notifTitle, notifMessage));
+            if (authEntity.getDependent() != null) {
+                authEntity.getDependent().addNotification(new Notification(notifTitle, notifMessage));
+            }
         }
     }
 
