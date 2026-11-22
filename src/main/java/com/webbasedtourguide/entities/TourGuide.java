@@ -6,6 +6,7 @@ import com.webbasedtourguide.mappers.DayOfWeekSetConverter;
 import jakarta.persistence.*;
 
 import java.time.DayOfWeek;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
@@ -30,7 +31,7 @@ public class TourGuide extends AuthEntityDependent {
 
     @OneToMany
     @JoinColumn(name = "tour_guide_id")
-    private List<Rating> ratings;
+    private List<Rating> ratings = new ArrayList<>();
 
     public Integer getId() {
         return id;
@@ -74,17 +75,26 @@ public class TourGuide extends AuthEntityDependent {
     }
 
     public void addRating(Rating rating) {
+        if (this.ratings == null) {
+            this.ratings = new ArrayList<>();
+        }
         ratings.add(rating);
     }
 
     public List<Rating> getRatings(int count) {
+        if (ratings == null || ratings.isEmpty()) {
+            return new ArrayList<>();
+        }
         return ratings.subList(0, Math.min(ratings.size(), count));
     }
 
     public double getRatingAvg() {
+        if (ratings == null || ratings.isEmpty()) {
+            return 0.0;
+        }
         return ratings.stream().mapToInt(Rating::getStarRating)
                 .average()
-                .orElse(0);
+                .orElse(0.0);
     }
 
     public EnumSet<DayOfWeek> getActiveDays() {

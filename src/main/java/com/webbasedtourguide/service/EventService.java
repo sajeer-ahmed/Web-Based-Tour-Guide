@@ -106,9 +106,21 @@ public class EventService {
     public BasicResponse deleteEvent(Integer id) {
         Event event = eventRepository.findById(id).orElse(null);
         if (event == null) return BasicResponse.badRequest("No such event");
+
+        // NEW: an event that tourists registered for cannot be deleted (foreign key from TourBooking.event)
+        long registrations = bookingRepository.countByEvent_Id(id);
+        if (registrations > 0)
+            return BasicResponse.badRequest("Cannot delete: " + registrations
+                    + " booking(s) are linked to this event. Set its end date to a past date instead.");
+
         tourPackageService.detachEvent(event);
         eventRepository.delete(event);
         return BasicResponse.ok();
+    }
+
+    public BasicResponse discontinueEvent(Integer eventId) throws EventException {
+        if (eventRepository.discontinueEvent(eventId, Instant.now()) == 1) return BasicResponse.ok();
+        throw new EventException("No such event");
     }
 
     public List<EventControlDTO> getAllEventsAdmin() {
@@ -134,11 +146,10 @@ public class EventService {
 
     @Transactional
     public BasicResponse discontinueEvent(EventControlDTO request) throws EventException {
-
-        if (eventRepository.discontinueEvent(request.getBookingId(), Instant.now()) == 1) {
-            return BasicResponse.ok();
+        if (request.getEventId() == null) {
+            throw new EventException("No such event");
         }
-        throw new EventException("Error discontinuing event");
+        return discontinueEvent(request.getEventId());
     }
 
     public Optional<Event> getValidEvent(Integer eventId, Integer pkgId) {
